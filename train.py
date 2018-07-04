@@ -1,5 +1,5 @@
 """
-data pipeline for loading data
+data pipeline for loading ravdess, yscz data
 model
 save weights
 
@@ -24,12 +24,16 @@ CHUNK = 1024
 CHANNELS = 2
 RATE = 44100
 N_TIME_TEST = 20
+DATA_TO_USE = 'yscz'
 FEATURES_TO_USE = "mfcc-on-feature"
 AVAILABLE_FEATURES_TO_USE = ("mfcc-on-data", "mfcc-on-feature",)
-assert FEATURES_TO_USE in AVAILABLE_FEATURES_TO_USE, "{} not in {}!".format(FEATURES_TO_USE,
-                                                                            AVAILABLE_FEATURES_TO_USE)
-DATA_PATH = '/Users/harryxu/school/data/Audio_Speech_Actors_01-24' if os.environ['PWD'].startswith('/Users/harryxu') \
-    else '/data/harry/speech_emotion/Audio_Speech_Actors_01-24'
+AVAILABLE_DATA = ("yscz", "ravdess",)
+if DATA_TO_USE == 'ravdess':
+    DATA_PATH = '/Users/harryxu/school/data/Audio_Speech_Actors_01-24' if os.environ['PWD'].startswith('/Users/harryxu') \
+        else '/data/harry/speech_emotion/Audio_Speech_Actors_01-24'
+elif DATA_TO_USE == 'yscz':
+    DATA_PATH = '/Users/harryxu/school/data/yscz-sound' if os.environ['PWD'].startswith('/Users/harryxu') \
+        else '/data/lhy/sound'
 CLS_LABEL_DICT = {
     'neutral-normal': '正常说话',
     'calm-normal': '正常说话',
@@ -44,14 +48,62 @@ CLS_LABEL_DICT = {
     'angry-strong': '大声争吵',
     'disgust-strong': '大声争吵',
 }
+assert FEATURES_TO_USE in AVAILABLE_FEATURES_TO_USE, "{} not in {}!".format(FEATURES_TO_USE,
+                                                                            AVAILABLE_FEATURES_TO_USE)
+assert DATA_TO_USE in AVAILABLE_DATA, "{} not in {}!".format(DATA_TO_USE,
+                                                             AVAILABLE_DATA)
 
 
-def process_data_ravdess(path, t=2, n_samples=3):
+def process_data_yscz(path, t=2, n_samples=50):
     """construct dataset X, y from RAVDESS, each RAVDESS wavefile is sampled
     n_samples times at t seconds; Meanwhile, a meta dictionary is built which has
      key: wavefile basename, values: {'X', 'y', 'path'}; 'X' is stacked numpy array
      of normalized wave amplitude samples, y is a list of string labels,
      path is path/to/wavefile"""
+    path = path.rstrip('/')
+    wav_files = glob.glob(path + '/*.wav')
+    meta_dict = {}
+
+    LABEL_DICT = {
+        '小声': '窃窃私语',
+        '正常': '正常说话',
+        '大声': '大声争吵',
+    }
+
+    print("constructing meta dictionary for {}...".format(path))
+    for i, wav_file in enumerate(tqdm(wav_files)):
+        label = LABEL_DICT[os.path.basename(wav_file)[:2]]
+        wav_data, _ = librosa.load(wav_file, sr=RATE)
+        X1 = []
+        y1 = []
+        for index in np.random.choice(range(len(wav_data) - t*RATE), n_samples, replace=False):
+            X1.append(wav_data[index : (index+t*RATE)])
+            y1.append(label)
+        X1 = np.array(X1)
+        meta_dict[i] = {
+            'X': X1,
+            'y': y1,
+            'path': wav_file
+        }
+
+    print("building X, y...")
+    X = []
+    y = []
+    for k in meta_dict:
+        X.append(meta_dict[k]['X'])
+        y += meta_dict[k]['y']
+    X = np.row_stack(X)
+    y = np.array(y)
+    assert len(X) == len(y), "X length and y length must match! X shape: {}, y length: {}".format(X.shape, y.shape)
+    return X, y
+
+
+def process_data_ravdess(path, t=2, n_samples=3):
+    """construct dataset X, y from yscz dataset, each wavefile is sampled
+        n_samples times at t seconds; Meanwhile, a meta dictionary is built which has
+         key: wavefile basename, values: {'X', 'y', 'path'}; 'X' is stacked numpy array
+         of normalized wave amplitude samples, y is a list of string labels,
+         path is path/to/wavefile"""
     path = path.rstrip('/')
     wav_files = glob.glob(path + '/*/*.wav')
     meta_dict = {}
@@ -82,8 +134,8 @@ def process_data_ravdess(path, t=2, n_samples=3):
         wav_data, _ = librosa.load(wav_file, sr=RATE)
         X1 = []
         y1 = []
-        for index in np.random.choice(range(len(wav_data) - t*RATE), n_samples, replace=False):
-            X1.append(wav_data[index : (index+t*RATE)])
+        for index in np.random.choice(range(len(wav_data) - t * RATE), n_samples, replace=False):
+            X1.append(wav_data[index: (index + t * RATE)])
             y1.append(label)
         X1 = np.array(X1)
         meta_dict[i] = {
@@ -142,7 +194,10 @@ class FeatureExtractor(object):
 
 def train():
     # process data to X, Y format
-    X, y = process_data_ravdess(DATA_PATH)
+    if DATA_TO_USE == 'ravdess':
+        X, y = process_data_ravdess(DATA_PATH)
+    elif DATA_TO_USE == 'yscz':
+        X, y = process_data_yscz(DATA_PATH)
     lb_encoder = LabelEncoder()
     y = lb_encoder.fit_transform(y)
     print(X.shape)
@@ -171,8 +226,6 @@ def train():
     valid_X_features /= train_X_features_factors
     train_X_features = np.expand_dims(train_X_features, 2)
     valid_X_features = np.expand_dims(valid_X_features, 2)
-    # train_y = to_categorical(train_y)
-    # valid_y = to_categorical(valid_y)
     n_class = len(lb_encoder.classes_)
     d = train_X_features.shape[1]
     print("training on {} data ... valid on {} data... dimension is {}...".format(train_X_features.shape[0],
@@ -198,18 +251,14 @@ def train():
     model.compile(loss='sparse_categorical_crossentropy', optimizer=opt, metrics=['accuracy'])
 
     ckpt = keras.callbacks.ModelCheckpoint('experiments/mfcc_model.hdf5', save_best_only=True)
-    history = model.fit(train_X_features, train_y, batch_size=32, epochs=150,
+    history = model.fit(train_X_features, train_y, batch_size=32, epochs=200,
                         validation_data=(valid_X_features, valid_y),
                         callbacks=[ckpt, ])
 
     # report
-    # valid_y_cls = np.argmax(valid_y, axis=1)
-    valid_y_cls = valid_y
-    pred_valid_y_cls = model.predict_classes(valid_X_features, )
-    print("DEBUG: valid_y_cls.shape ", valid_y_cls.shape)
-    print("DEBUG: pred_valid_y_cls.shape ", pred_valid_y_cls.shape)
-    print("accuracy on validation set is {}...".format(accuracy_score(valid_y_cls, pred_valid_y_cls)))
-    cnf_matrix = confusion_matrix(valid_y_cls, pred_valid_y_cls)
+    pred_valid_y = model.predict_classes(valid_X_features, )
+    print("accuracy on validation set is {}...".format(accuracy_score(valid_y, pred_valid_y)))
+    cnf_matrix = confusion_matrix(valid_y, pred_valid_y)
     print(cnf_matrix)
     print("class names are {}...".format(lb_encoder.classes_))
 
