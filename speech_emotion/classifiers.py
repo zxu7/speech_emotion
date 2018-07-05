@@ -1,19 +1,11 @@
 import numpy as np
-
-# set params here
-RULE1_PARAMS = {
-    "thresh1": 0.5,
-    "thresh2": 0.2,
-    "t1": 1,
-    "t2": 1,
-    "t3": 5}
+from .features import FeatureExtractor
 
 
-class RuleBasedClassifier(object):
+class StreamChunkClassifier(object):
     """
-    An classifier Object uses rule-based methods to classifiy sound amplitudes. The Object reads in audio
-    data and output a predicted label
-
+    An classifier Object  that reads in audio data and output a predicted label.
+    The Object uses rule-based methods to classifiy sound amplitudes.
     声强数据的分类器。现阶段仅支持rule1。
     rule1解释：classify方法读入list/numpy array形式的audio_data数据并存储在类变量
     self.collected_samples中。分类逻辑仅使用self.collected_samples中的后samples_required个数据，
@@ -24,25 +16,31 @@ class RuleBasedClassifier(object):
     def __init__(self, sample_rate=44100):
         self.SAMPLE_RATE = sample_rate
         self.collected_samples = []
+        self.feature_extractor = None
 
-    def classify(self, audio_data, classify_func='rule1'):
+    def classify(self, audio_data, rule_params, classify_func='predict_by_rule1'):
         """
         read new chunk of audio data and classify
         :param: audio_data: list/numpy array
+        :param: rule_params: dict;
         :return: None or label
         """
         out = None
-        ACCEPTED_RULES = ('rule1',)
+        ACCEPTED_RULES = ('predict_by_rule1', 'predict_by_rule2')
         assert classify_func in ACCEPTED_RULES, "{} not understood!".format(classify_func)
 
         self.collected_samples += list(audio_data)
 
-        if classify_func in ('rule1',):
-            out = self.rule1(**RULE1_PARAMS)
+        if classify_func in ('predict_by_rule1',):
+            out = self.predict_by_rule1(**rule_params)
+        elif classify_func in ('predict_by_rule2',):
+            if self.feature_extractor is None:
+                self.feature_extractor = FeatureExtractor(rate=rule_params['rate'])
+            out = self.predict_by_rule2(**rule_params)
 
         return out
 
-    def rule1(self, thresh1=0.5, thresh2=0.2, t1=1, t2=1, t3=5):
+    def predict_by_rule1(self, thresh1=0.5, thresh2=0.2, t1=1, t2=1, t3=5):
         """
         1、 大声吵闹: 该一秒(t2)的平均声强比上一秒(t1)增加50%(thresh1)以上, 并在后面连续5秒(t3)以上在此位置震荡，不会低于增加后的声强的20%(thresh2)
         2、 低声私语: 该一秒(t2)的平均声强比上一秒(t1)减少50%(thresh1)以上, 并在后面连续5秒(t3)以上在此位置震荡，不会高于增加后的声强的20%(thresh2)
@@ -52,6 +50,7 @@ class RuleBasedClassifier(object):
         :param t1: float; 在上述例子中为上一秒 (1)
         :param t2: float; 在上述例子中为该一秒 (1)
         :param t3: float; 在上述例子中为后面连续五秒 (5)
+        :return pred_label: None or str; return None if not enough samples are provided
         """
         time_required = t1 + t2 + t3
         samples_required = self.SAMPLE_RATE * time_required
@@ -87,4 +86,29 @@ class RuleBasedClassifier(object):
             else:
                 pred_label = "正常说话"
 
+            return pred_label
+
+    def predict_by_rule2(self, time_required, model, model_name, normalize=True, rate=None):
+        """model based classifier """
+        # TODO: warning if model is trained on a different sample rate from self.SAMPLE_RATE
+        sr, dataset, t_required, features_to_use, _, _ = model_name.split('_')
+        samples_required = self.SAMPLE_RATE * time_required
+        if len(self.collected_samples) < samples_required:
+            # not enough samples to analyze
+            return None
+        else:
+            # truncate list
+            self.collected_samples = self.collected_samples[-samples_required:]
+            if normalize:
+                collected_samples = np.expand_dims(np.array(self.collected_samples) / (2**15 - 1), 0)
+            else:
+                collected_samples = np.expand_dims(np.array(self.collected_samples), 0)
+            self.feature_extractor = FeatureExtractor(rate=rate)
+            if features_to_use in ('mfcc-on-data',):
+                collected_samples_features = self.feature_extractor.get_mfcc_across_data(collected_samples,
+                                                                                         n_mfcc=13)
+            elif features_to_use in ('mfcc-on-feature',):
+                collected_samples_features = self.feature_extractor.get_mfcc_across_features(collected_samples,
+                                                                                             n_mfcc=13)
+            pred_label = model.predict(collected_samples_features, verbose=0, predict_label=True)
             return pred_label

@@ -17,15 +17,18 @@ from keras.models import Sequential
 from keras.layers import Conv1D, MaxPool1D, Dense, Dropout, Flatten
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.preprocessing import LabelEncoder
+from speech_emotion.models import KerasModel
+from speech_emotion.features import FeatureExtractor
 
 T_CLASSIFY = 2
 CHUNK = 1024
 # FORMAT = pyaudio.paInt16
-CHANNELS = 2
+# CHANNELS = 2
 RATE = 44100
 N_TIME_TEST = 20
 DATA_TO_USE = 'yscz'
 FEATURES_TO_USE = "mfcc-on-feature"
+MODEL_NAME = "experiments/{}_{}_{}_{}_cnn_model.hdf5".format(RATE, DATA_TO_USE, T_CLASSIFY, FEATURES_TO_USE)
 AVAILABLE_FEATURES_TO_USE = ("mfcc-on-data", "mfcc-on-feature",)
 AVAILABLE_DATA = ("yscz", "ravdess",)
 if DATA_TO_USE == 'ravdess':
@@ -156,48 +159,12 @@ def process_data_ravdess(path, t=2, n_samples=3):
     return X, y
 
 
-class FeatureExtractor(object):
-    """return train_X_features, valid_X_features"""
-    def __init__(self, train_X_data, valid_X_data, rate):
-        self.train_X = train_X_data
-        self.valid_X = valid_X_data
-        self.rate = rate
-
-    def get_mfcc_across_data(self, n_mfcc=13):
-        """get mean of mfcc features across frame"""
-        print("building mfcc features...")
-        train_X_features = np.apply_along_axis(lambda x: np.mean(librosa.feature.mfcc(x, sr=self.rate,
-                                                                                      n_mfcc=n_mfcc),
-                                                                 axis=0),
-                                               1, self.train_X)
-        valid_X_features = np.apply_along_axis(lambda x: np.mean(librosa.feature.mfcc(x, sr=self.rate,
-                                                                                      n_mfcc=n_mfcc),
-                                                                 axis=0),
-                                               1, self.valid_X)
-        return train_X_features, valid_X_features
-
-    def get_mfcc_across_features(self, n_mfcc=13):
-        """get mean, variance, max, min of mfcc features across feature"""
-        def _get_mfcc_features(x):
-            mfcc_data = librosa.feature.mfcc(x, sr=self.rate, n_mfcc=n_mfcc)
-            mean = np.mean(mfcc_data, axis=1)
-            var = np.var(mfcc_data, axis=1)
-            maximum = np.max(mfcc_data, axis=1)
-            minimum = np.min(mfcc_data, axis=1)
-            out = np.array(list(mean) + list(var) + list(maximum) + list(minimum))
-            return out
-
-        train_X_features = np.apply_along_axis(_get_mfcc_features, 1, self.train_X)
-        valid_X_features = np.apply_along_axis(_get_mfcc_features, 1, self.valid_X)
-        return train_X_features, valid_X_features
-
-
 def train():
     # process data to X, Y format
     if DATA_TO_USE == 'ravdess':
-        X, y = process_data_ravdess(DATA_PATH)
+        X, y = process_data_ravdess(DATA_PATH, T_CLASSIFY)
     elif DATA_TO_USE == 'yscz':
-        X, y = process_data_yscz(DATA_PATH)
+        X, y = process_data_yscz(DATA_PATH, T_CLASSIFY)
     lb_encoder = LabelEncoder()
     y = lb_encoder.fit_transform(y)
     print(X.shape)
@@ -214,49 +181,31 @@ def train():
     valid_y = y[valid_indices]
 
     # extract features: mfccs
-    feature_extractor = FeatureExtractor(train_X, valid_X, rate=RATE)
+    feature_extractor = FeatureExtractor(rate=RATE)
+    # TODO: put these in FeatureExtractor
     if FEATURES_TO_USE in ('mfcc-on-data', ):
-        train_X_features, valid_X_features = feature_extractor.get_mfcc_across_data(n_mfcc=13)
+        train_X_features, valid_X_features = feature_extractor.get_mfcc_across_data(train_X, n_mfcc=13), \
+                                             feature_extractor.get_mfcc_across_data(valid_X, n_mfcc=13),
     elif FEATURES_TO_USE in ('mfcc-on-feature', ):
-        train_X_features, valid_X_features = feature_extractor.get_mfcc_across_features(n_mfcc=13)
+        train_X_features, valid_X_features = feature_extractor.get_mfcc_across_features(train_X, n_mfcc=13),\
+                                             feature_extractor.get_mfcc_across_features(valid_X, n_mfcc=13),
 
-    # normalize for easier CNN training
-    train_X_features_factors = np.std(abs(train_X_features), axis=0)
-    train_X_features /= train_X_features_factors
-    valid_X_features /= train_X_features_factors
-    train_X_features = np.expand_dims(train_X_features, 2)
-    valid_X_features = np.expand_dims(valid_X_features, 2)
     n_class = len(lb_encoder.classes_)
-    d = train_X_features.shape[1]
-    print("training on {} data ... valid on {} data... dimension is {}...".format(train_X_features.shape[0],
-                                                                                  valid_X_features.shape[0],
-                                                                                  d))
-
     # build model and fit
-    model = Sequential()
-    model.add(Conv1D(128, 5, padding='same',
-                     input_shape=(d, 1), activation='relu'))
-    model.add(Conv1D(128, 5, padding='same', activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(MaxPool1D(pool_size=(8,)))
-    model.add(Conv1D(128, 5, padding='same', activation='relu'))
-    model.add(Conv1D(128, 5, padding='same', activation='relu'))
-    model.add(Conv1D(128, 5, padding='same', activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(Conv1D(128, 5, padding='same', activation='relu'))
-    model.add(Flatten())
-    model.add(Dense(n_class, activation='softmax'))
-    opt = keras.optimizers.rmsprop(lr=1e-4, decay=1e-6)
-    opt = keras.optimizers.Adam(1e-3)
-    model.compile(loss='sparse_categorical_crossentropy', optimizer=opt, metrics=['accuracy'])
+    model = KerasModel()
+    model.train(train_X=train_X_features,
+                train_y=train_y,
+                valid_X=valid_X_features,
+                valid_y=valid_y,
+                n_class=n_class,
+                model_path=MODEL_NAME,
+                class_names=lb_encoder.classes_)
 
-    ckpt = keras.callbacks.ModelCheckpoint('experiments/mfcc_model.hdf5', save_best_only=True)
-    history = model.fit(train_X_features, train_y, batch_size=32, epochs=200,
-                        validation_data=(valid_X_features, valid_y),
-                        callbacks=[ckpt, ])
-
+    del model
+    model = KerasModel()
+    model.load(MODEL_NAME)
     # report
-    pred_valid_y = model.predict_classes(valid_X_features, )
+    pred_valid_y = model.predict(valid_X_features)
     print("accuracy on validation set is {}...".format(accuracy_score(valid_y, pred_valid_y)))
     cnf_matrix = confusion_matrix(valid_y, pred_valid_y)
     print(cnf_matrix)
