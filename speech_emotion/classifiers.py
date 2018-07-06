@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from .features import FeatureExtractor
 
@@ -34,8 +35,6 @@ class StreamChunkClassifier(object):
         if classify_func in ('predict_by_rule1',):
             out = self.predict_by_rule1(**rule_params)
         elif classify_func in ('predict_by_rule2',):
-            if self.feature_extractor is None:
-                self.feature_extractor = FeatureExtractor(rate=rule_params['rate'])
             out = self.predict_by_rule2(**rule_params)
 
         return out
@@ -88,11 +87,21 @@ class StreamChunkClassifier(object):
 
             return pred_label
 
-    def predict_by_rule2(self, time_required, model, model_name, normalize=True, rate=None):
-        """model based classifier """
-        # TODO: warning if model is trained on a different sample rate from self.SAMPLE_RATE
-        sr, dataset, t_required, features_to_use, _, _ = model_name.split('_')
+    def predict_by_rule2(self, time_required, model, model_name, normalize=True, rate=None, interval=1):
+        """
+        KerasModel based classifier
+        :param time_required: int; number of seconds required to input to model
+        :param model: KerasModel Object;
+        :param model_name: str; path/to/model
+        :param normalize: bool; normalize amplitude data by dividing by (2**15-1)
+        :param rate: int; sample rate
+        :param interval: int; number of seconds between predictions, this number MUST be smaller than time_required
+        :return:
+        """
+        # TODO: give warning if model is trained on a different sample rate from self.SAMPLE_RATE
+        sr, dataset, t_required, features_to_use, _, _ = os.path.basename(model_name).split('_')
         samples_required = self.SAMPLE_RATE * time_required
+        interval_samples = self.SAMPLE_RATE * interval
         if len(self.collected_samples) < samples_required:
             # not enough samples to analyze
             return None
@@ -103,12 +112,13 @@ class StreamChunkClassifier(object):
                 collected_samples = np.expand_dims(np.array(self.collected_samples) / (2**15 - 1), 0)
             else:
                 collected_samples = np.expand_dims(np.array(self.collected_samples), 0)
-            self.feature_extractor = FeatureExtractor(rate=rate)
-            if features_to_use in ('mfcc-on-data',):
-                collected_samples_features = self.feature_extractor.get_mfcc_across_data(collected_samples,
-                                                                                         n_mfcc=13)
-            elif features_to_use in ('mfcc-on-feature',):
-                collected_samples_features = self.feature_extractor.get_mfcc_across_features(collected_samples,
-                                                                                             n_mfcc=13)
+            # extract features
+            if self.feature_extractor is None:
+                self.feature_extractor = FeatureExtractor(rate=rate)
+            collected_samples_features = self.feature_extractor.get_features(features_to_use,
+                                                                             collected_samples,
+                                                                             n_mfcc=13)
             pred_label = model.predict(collected_samples_features, verbose=0, predict_label=True)
+            # truncate list to interval
+            self.collected_samples = self.collected_samples[-interval_samples:]
             return pred_label

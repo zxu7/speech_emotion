@@ -22,7 +22,7 @@ RULE1_PARAMS = {
     "t3": 5}
 
 RULE2_PARAMS = {
-    "model_name": 'experiments/44100_yscz_2_mfcc_cnn_model.hdf5',
+    "model_name": 'experiments/44100_yscz_2_mfcc-on-feature_cnn_model.hdf5',
     "time_required": 2,
     "rate": RATE
 }
@@ -61,7 +61,7 @@ def main():
         data = np.fromstring(stream.read(CHUNK, exception_on_overflow=False), dtype=np.int16)
         frames = np.concatenate((frames, data))  # 2 bytes(16 bits) per channel
         new_label = classifier.classify(data, rule_params=RULE_PARAMS, classify_func=RULE)
-        if label != new_label:
+        if label != new_label and new_label is not None:
             print(new_label)
             label = new_label
 

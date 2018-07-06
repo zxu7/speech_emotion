@@ -6,15 +6,11 @@ save weights
 """
 
 import os
-import keras
 import glob
 import time
 import librosa
 import numpy as np
 from tqdm import tqdm
-from keras.utils import to_categorical
-from keras.models import Sequential
-from keras.layers import Conv1D, MaxPool1D, Dense, Dropout, Flatten
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.preprocessing import LabelEncoder
 from speech_emotion.models import KerasModel
@@ -27,9 +23,9 @@ CHUNK = 1024
 RATE = 44100
 N_TIME_TEST = 20
 DATA_TO_USE = 'yscz'
-FEATURES_TO_USE = "mfcc-on-feature"
+FEATURES_TO_USE = "mfcc-on-feature" # options: ("mfcc-on-data", "mfcc-on-feature",)
 MODEL_NAME = "experiments/{}_{}_{}_{}_cnn_model.hdf5".format(RATE, DATA_TO_USE, T_CLASSIFY, FEATURES_TO_USE)
-AVAILABLE_FEATURES_TO_USE = ("mfcc-on-data", "mfcc-on-feature",)
+
 AVAILABLE_DATA = ("yscz", "ravdess",)
 if DATA_TO_USE == 'ravdess':
     DATA_PATH = '/Users/harryxu/school/data/Audio_Speech_Actors_01-24' if os.environ['PWD'].startswith('/Users/harryxu') \
@@ -51,8 +47,6 @@ CLS_LABEL_DICT = {
     'angry-strong': '大声争吵',
     'disgust-strong': '大声争吵',
 }
-assert FEATURES_TO_USE in AVAILABLE_FEATURES_TO_USE, "{} not in {}!".format(FEATURES_TO_USE,
-                                                                            AVAILABLE_FEATURES_TO_USE)
 assert DATA_TO_USE in AVAILABLE_DATA, "{} not in {}!".format(DATA_TO_USE,
                                                              AVAILABLE_DATA)
 
@@ -182,13 +176,9 @@ def train():
 
     # extract features: mfccs
     feature_extractor = FeatureExtractor(rate=RATE)
-    # TODO: put these in FeatureExtractor
-    if FEATURES_TO_USE in ('mfcc-on-data', ):
-        train_X_features, valid_X_features = feature_extractor.get_mfcc_across_data(train_X, n_mfcc=13), \
-                                             feature_extractor.get_mfcc_across_data(valid_X, n_mfcc=13),
-    elif FEATURES_TO_USE in ('mfcc-on-feature', ):
-        train_X_features, valid_X_features = feature_extractor.get_mfcc_across_features(train_X, n_mfcc=13),\
-                                             feature_extractor.get_mfcc_across_features(valid_X, n_mfcc=13),
+    train_X_features, valid_X_features = feature_extractor.get_features(FEATURES_TO_USE, train_X, n_mfcc=13), \
+                                         feature_extractor.get_features(FEATURES_TO_USE, valid_X, n_mfcc=13),
+
 
     n_class = len(lb_encoder.classes_)
     # build model and fit
